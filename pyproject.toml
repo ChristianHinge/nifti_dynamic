@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nifti_dynamic"
+version = "0.1.0"
+description = "A package for dynamic NIFTI analysis"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "nibabel",
+    "indexed_gzip",
+    "scipy",
+    "scikit-learn",
+    "tqdm",
+    
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["nifti_dynamic"]
