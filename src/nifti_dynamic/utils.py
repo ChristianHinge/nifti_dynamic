@@ -88,4 +88,7 @@ def extract_tac(img, seg):
 
     seg_bb = img[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1,:]
     tac = seg_bb[seg[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1],:].mean(axis=0)
+
     return tac
+
+

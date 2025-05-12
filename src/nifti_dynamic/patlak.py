@@ -4,8 +4,23 @@ from tqdm import tqdm
 from scipy.integrate import cumulative_simpson
 from sklearn.linear_model import LinearRegression
 from .utils import OverlappedChunkIterator, img_to_array_or_dataobj
-def _voxel_patlak_chunk(arr,input_fun,t,n_frames_linear_regression=10):
-   
+
+def roi_patlak(roi_tac,if_tac,t,n_frames_linear_regression):
+    slopes, intercepts = _voxel_patlak_chunk(roi_tac,if_tac,t,n_frames_linear_regression=n_frames_linear_regression)
+    
+    with np.errstate(divide='ignore',invalid='ignore'):
+        _X = cumulative_simpson(if_tac,x=t/60,initial=0) / if_tac
+        X = _X.reshape(-1,1)
+
+    # Normalized voxel response
+    Y = roi_tac.reshape(-1, roi_tac.shape[-1]).T[:]
+    Y = Y/if_tac[:,None]
+    
+    return slopes, intercepts, X, Y
+
+
+def _voxel_patlak_chunk(arr,input_fun,t,n_frames_linear_regression=10, _return_x_y=False):
+    
     # Normalized cumsum AIF
     with np.errstate(divide='ignore',invalid='ignore'):
         _X = cumulative_simpson(input_fun,x=t/60,initial=0) / input_fun
@@ -36,6 +51,7 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
     """
     img = img_to_array_or_dataobj(img)
     out = np.zeros(img.shape[:-1])
+    out_intercepts = np.zeros(img.shape[:-1])
     border_size = 3 * gaussian_filter_size if gaussian_filter_size > 0 else 0
     
     # Create iterator for overlapped chunks
@@ -60,5 +76,6 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
         
         # Store results
         out[..., out_start:out_start + out_size] = slopes
-    
-    return out
+        out_intercepts[..., out_start:out_start + out_size] = intercepts
+        
+    return out, out_intercepts
