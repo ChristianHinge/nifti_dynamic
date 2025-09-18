@@ -16,6 +16,7 @@ from scipy.ndimage import (
 from skimage.measure import regionprops
 from pathlib import Path
 from nifti_dynamic.utils import img_to_array_or_dataobj
+from nifti_dynamic.visualizations import plot_aorta_visualizations
 from enum import Enum
 
 class AortaSegment(Enum):
@@ -47,7 +48,7 @@ def find_pattern_transition(array, pattern):
     
     return indices[0] + len(pattern) // 2
 
-
+    
 def find_aortic_segments_boundaries(aorta_volume):
     """
     Identify axial indices where aorta transitions between segments
@@ -58,16 +59,27 @@ def find_aortic_segments_boundaries(aorta_volume):
     islands = np.minimum(islands, 2)  # Cap max islands at 2
     islands = median_filter(islands, size=5)  # Smooth counts
     
-    # Find transition points 1 -> 2 islands, 2->1 islands
-    ix_start = find_pattern_transition(islands, np.array([1, 1, 2, 2]))
-    ix_curve = find_pattern_transition(islands, np.array([2, 2, 1, 1]))
+    # Find aortic transition points 1 -> 2 islands and 2->1 islands
+    ix_start = find_pattern_transition(islands, np.array([1, 1, 1, 1, 2, 2,2,2]))
+    ix_curve = find_pattern_transition(islands, np.array([2,2, 2, 2, 1, 1,1,1]))
 
     return ix_start, ix_curve
 
+def maybe_fix_floaters(aorta):
+    print("WARNING: Aorta is discontinuous, discarding smallest islands. Please inspect visually")
+    labeled, _ = label(aorta)
+    if len(np.unique(labeled)) > 2:
+        frequencies = np.bincount(labeled.flatten())
+        #ignore background counts (ix=0)
+        ix_largest_island = np.argmax(frequencies[1:])+1
+        labeled = labeled==ix_largest_island
+    return labeled
 
 def segment_aorta(aorta):
     # Segment aorta into four anatomical regions
     aorta = aorta.copy()
+    aorta = maybe_fix_floaters(aorta)
+
     ix_start, ix_curve = find_aortic_segments_boundaries(aorta)
     
     # Process pre-curve region
@@ -132,6 +144,15 @@ def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, cylind
     pet_masked = np.ma.masked_array(data=pet, mask=~aorta_segment)
     median_axial_uptake = np.ma.median(pet_masked, axis=(0,1)).filled(0)
     median_axial_uptake = uniform_filter(median_axial_uptake, n_slices_needed)
+    
+    #Ensure that the start_slice lies sufficiently in the middle of the aorta segment
+    aorta_axial_mask_ixs = np.where(np.any(aorta_segment,axis=(0,1)))[0]
+    axial_ix_min, axial_ix_max = np.min(aorta_axial_mask_ixs), np.max(aorta_axial_mask_ixs)
+    if axial_ix_max-axial_ix_min < n_slices_needed:
+        raise Exception(f"The requested cylinder is too long {n_slices_needed} for the aorta segment {axial_ix_max-axial_ix_min}. Either reduce the cylinder volume or increase the cylinder width")
+    median_axial_uptake[:axial_ix_min + n_slices_needed//2 ] = 0
+    median_axial_uptake[ axial_ix_max - n_slices_needed//2:] = 0
+
     start_slice = np.argmax(median_axial_uptake) - n_slices_needed//2
 
     # Place VOI seeds at center of mass for each slice
@@ -186,8 +207,41 @@ def refine_aorta_with_pet_uptake(aorta, pet):
     aorta_refined[~activity_mask] = 0
     return aorta_refined
 
+def extract_aorta_segments(aorta_mask, pet):
+    """
+    Extract VOIs from different aorta segments
 
-def extract_aorta_vois(aorta_mask, affine, dpet, frame_times_start, t_threshold=40, volume_ml=1.0, cylinder_width=3):
+    Parameters:
+    -----------
+    aorta_mask : numpy.ndarray
+        Binary mask of the aorta from totalsegmentator
+    affine : numpy.ndarray
+        Affine matrix of the aorta image
+    dpet : nibabel.Nifti1Image
+        Dynamic PET image
+    frame_times_start : numpy.ndarray
+        Start times for each frame
+    t_threshold : int
+        Time threshold for early frames in seconds (default: 40)
+    volume_ml : float
+        Target volume in milliliters (default: 1.0)
+    cylinder_width : int
+        Width of the cylindrical cross-section (default: 3)
+        
+    Returns:
+    --------
+    tuple
+        (VOIs mask, segmented aorta mask)
+    """
+    affine = aorta_mask.affine
+    aorta_mask = aorta_mask.get_fdata()>0.5    
+    aorta_segments = segment_aorta(aorta_mask)
+    aorta_segments = refine_aorta_with_pet_uptake(aorta_segments, pet)
+    
+    return nib.Nifti1Image(aorta_segments.astype("int16"),affine)
+    
+
+def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, cylinder_width=3,segment=None):
     """
     Extract VOIs from different aorta segments
     
@@ -213,28 +267,73 @@ def extract_aorta_vois(aorta_mask, affine, dpet, frame_times_start, t_threshold=
     tuple
         (VOIs mask, segmented aorta mask)
     """
-    # Average early PET frames and refine aorta segmentation
-    pet_40s = average_early_pet_frames(dpet, frame_times_start, t_threshold)
-    aorta_segments = segment_aorta(aorta_mask)
-    aorta_segments = refine_aorta_with_pet_uptake(aorta_segments, pet_40s)
+    affine = aorta_segments.affine
+        # Calculate voxel size from affine matrix
+    voxel_size = np.array(aorta_segments.header.get_zooms())
     
-    # Calculate voxel size from affine matrix
-    voxel_size = np.abs(np.diag(affine[:3, :3]))
-    
+    aorta_segments_arr = aorta_segments.get_fdata().astype(np.int16)
     # Initialize VOIs mask
-    vois = np.zeros_like(aorta_segments, dtype=np.int16)
+    vois = np.zeros_like(aorta_segments_arr)
+
+    # Do all Aorta Segments by default
+    if segment is None:
+        segs = AortaSegment
+    else:
+        segs = [segment]
 
     # Create VOIs for each aorta segment
-    for seg in AortaSegment:
-        aorta_segment = aorta_segments == seg.value
+    for seg in segs:
+        aorta_segment = aorta_segments_arr == seg.value
         print("Extracting VOI for", seg.name)
         if seg == AortaSegment.TOP:
-            voi = create_cylindrical_voi(aorta_segment.swapaxes(1,2), pet_40s.swapaxes(1,2), voxel_size=voxel_size[[0,2,1]], 
+            voi = create_cylindrical_voi(aorta_segment.swapaxes(1,2), pet.swapaxes(1,2), voxel_size=voxel_size[[0,2,1]], 
                                         volume_ml=volume_ml, cylinder_width=cylinder_width)
             voi = voi.swapaxes(1,2)
         else:
-            voi = create_cylindrical_voi(aorta_segment, pet_40s, voxel_size=voxel_size, 
+            voi = create_cylindrical_voi(aorta_segment, pet, voxel_size=voxel_size, 
                                         volume_ml=volume_ml, cylinder_width=cylinder_width)
         vois[voi] = seg.value
 
-    return vois, aorta_segments
+
+    vois = nib.Nifti1Image(vois,affine)
+    return vois
+
+
+def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0, cylinder_width=3, segment=None, image_path=None):
+    """
+    Extract VOIs from different aorta segments
+    
+    Parameters:
+    -----------
+    aorta_mask : numpy.ndarray
+        Binary mask of the aorta from totalsegmentator
+    affine : numpy.ndarray
+        Affine matrix of the aorta image
+    dpet : nibabel.Nifti1Image
+        Dynamic PET image
+    frame_times_start : numpy.ndarray
+        Start times for each frame
+    t_threshold : int
+        Time threshold for early frames in seconds (default: 40)
+    volume_ml : float
+        Target volume in milliliters (default: 1.0)
+    cylinder_width : int
+        Width of the cylindrical cross-section (default: 3)
+        
+    Returns:
+    --------
+    tuple
+        (VOIs mask, segmented aorta mask)
+    """
+    pet = average_early_pet_frames(dpet, frame_times_start, t_threshold)
+    aorta_segments = extract_aorta_segments(aorta_mask,pet)
+    aorta_vois = extract_aorta_vois(aorta_segments,pet,volume_ml=volume_ml,cylinder_width=cylinder_width,segment=segment)
+    
+    if image_path is not None:
+        print("Creating aorta visualization")
+        plot_aorta_visualizations(
+            pet,
+            aorta_segments,
+            aorta_vois,
+            image_path)
+    return aorta_segments, aorta_vois

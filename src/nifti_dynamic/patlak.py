@@ -19,7 +19,7 @@ def roi_patlak(roi_tac,if_tac,t,n_frames_linear_regression):
     return slopes, intercepts, X, Y
 
 
-def _voxel_patlak_chunk(arr,input_fun,t,n_frames_linear_regression=10, _return_x_y=False):
+def _voxel_patlak_chunk(arr,input_fun,t,n_frames_linear_regression=10):
     
     # Normalized cumsum AIF
     with np.errstate(divide='ignore',invalid='ignore'):
