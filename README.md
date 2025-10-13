@@ -4,6 +4,8 @@
 
 Efficient TAC extraction and Patlak analysis of HUGE PET arrays in NIfTI format. Works with gzipped 4D PET images (saving 90% disk space vs DICOM) 📦. All algorithms load partial chunks to prevent memory crashes when handling massive arrays (440×440×645×69×4 bytes = 32GB).
 
+> Implementation based on Andersen TL, et al. *Diagnostics* 2024;14(15):1590. [doi:10.3390/diagnostics14151590](https://doi.org/10.3390/diagnostics14151590)
+
 ## Installation 💾
 
 ```bash
