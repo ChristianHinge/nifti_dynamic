@@ -18,8 +18,8 @@ pip install nifti_dynamic
 
 - Automatic extraction of 4 VOIs: 30 seconds
 - TAC for single organs: 10 seconds  
-- TACs for all 114 TotalSegmentator organs: 2 minutes
-- Full voxel Patlak for 440×440×645×69 array: <1 minute
+- TACs for all 114 TotalSegmentator organs: 10 minutes
+- Full voxel Patlak for 440×440×645×69 array: 30 seconds
 
 ## Usage 🚀
 
