@@ -4,11 +4,12 @@
 ### Python ###
 # Byte-compiled / optimized / DLL files
 /data/
+.data/
 *.ipynb
 __pycache__/
 *.py[cod]
 *$py.class
-
+old/
 # C extensions
 *.so
 

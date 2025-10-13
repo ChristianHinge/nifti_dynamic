@@ -4,6 +4,8 @@ from tqdm import tqdm
 from scipy.integrate import cumulative_simpson
 from sklearn.linear_model import LinearRegression
 from .utils import OverlappedChunkIterator, img_to_array_or_dataobj
+import nibabel as nib
+
 
 def roi_patlak(roi_tac,if_tac,t,n_frames_linear_regression):
     slopes, intercepts = _voxel_patlak_chunk(roi_tac,if_tac,t,n_frames_linear_regression=n_frames_linear_regression)
@@ -49,6 +51,7 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
         n_frames_linear_regression: Number of frames for linear regression (default: 10)
         axial_chunk_size: Size of axial chunks to process (default: 8)
     """
+    affine = img.affine
     img = img_to_array_or_dataobj(img)
     out = np.zeros(img.shape[:-1])
     out_intercepts = np.zeros(img.shape[:-1])
@@ -77,5 +80,6 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
         # Store results
         out[..., out_start:out_start + out_size] = slopes
         out_intercepts[..., out_start:out_start + out_size] = intercepts
-        
+    out = nib.Nifti1Image(out,affine=affine)
+    out_intercepts = nib.Nifti1Image(out_intercepts,affine=affine)
     return out, out_intercepts

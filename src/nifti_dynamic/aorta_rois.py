@@ -13,8 +13,7 @@ from scipy.ndimage import (
     binary_dilation, 
     median_filter
 )
-from skimage.measure import regionprops
-from pathlib import Path
+
 from nifti_dynamic.utils import img_to_array_or_dataobj
 from nifti_dynamic.visualizations import plot_aorta_visualizations
 from enum import Enum
@@ -330,7 +329,6 @@ def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0,
     aorta_vois = extract_aorta_vois(aorta_segments,pet,volume_ml=volume_ml,cylinder_width=cylinder_width,segment=segment)
     
     if image_path is not None:
-        print("Creating aorta visualization")
         plot_aorta_visualizations(
             pet,
             aorta_segments,

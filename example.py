@@ -1,80 +1,86 @@
-## VIGTIGT: installer pip install indexed_gzip = langt hurtigere! 
 
-from pathlib import Path
-import os
-from scipy.ndimage import binary_erosion
-import json
-from nifti_dynamic.conversion import convert_dicom_to_nifti
-from nifti_dynamic.patlak import voxel_patlak
-from nifti_dynamic.utils import extract_tac
-from nifti_dynamic.aorta_rois import extract_aorta_vois, AortaSegment
+from nifti_dynamic.patlak import roi_patlak, voxel_patlak
+from nifti_dynamic.utils import extract_tac, extract_multiple_tacs
+from nifti_dynamic.aorta_rois import pipeline, AortaSegment
 import nibabel as nib
+from nibabel.processing import resample_from_to
+import json 
 import numpy as np
-from nifti_dynamic.utils import img_to_array_or_dataobj
-from tqdm import tqdm
+from matplotlib import pyplot as plt
+#Load dynamic pet and frame-times
+dynpet = nib.load(".data/dpet.nii.gz")
 
-ROOT = Path("/homes/hinge/Projects/dynamic/data")
-SUBJECT_ID = "sub01"
-dcm_dir = ROOT / "dcm_example"
+with open(".data/dpet.json", "r") as handle:
+    sidecar = json.load(handle)
+    frame_times_start = np.array(sidecar["FrameTimesStart"])
+    frame_duration = np.array(sidecar["FrameDuration"])
+    frame_time_middle = frame_times_start + frame_duration/2
 
-dynpet_path = ROOT / SUBJECT_ID / "dpt.nii.gz"
-sidecar_path = ROOT / SUBJECT_ID / "dpt.json"
-totalseg_path = ROOT / SUBJECT_ID / "seg_res.nii.gz"
-#rhaorta_path = ROOT / SUBJECT_ID / "new_aorta.nii.gz"
+# Load and desample totalsegmentator mask to dynamic pet
+totalseg = nib.load(".data/totalseg.nii.gz")
+totalseg = resample_from_to(totalseg,(dynpet.shape[:3],dynpet.affine),order=0)
 
-os.makedirs(ROOT / SUBJECT_ID, exist_ok=True)
+# Define aorta mask image
+aorta = nib.Nifti1Image((totalseg.get_fdata() == 52).astype("uint8"),affine=totalseg.affine)
 
-if not os.path.exists(dynpet_path):
-    print("Convert DICOM to Nifti")
-    convert_dicom_to_nifti(dcm_dir, dynpet_path, sidecar_path)
+#Extract aorta segments and aorta input function vois
+aorta_segments, aorta_vois = pipeline(
+    aorta_mask = aorta,
+    dpet = dynpet,
+    frame_times_start=frame_times_start,
+    cylinder_width=3,
+    volume_ml=1,
+    image_path=".data/visualization.jpg")
 
-with open(sidecar_path,'r') as f:
-    js = json.load(f)
-    FrameTimesStart = np.array(js['FrameTimesStart'])
-    FrameDuration = np.array(js['FrameDuration'])
-    ts = FrameTimesStart + FrameDuration/2.0
+# Use 1-ml bottom descending aorta VOI
+descending_bottom_voi = aorta_vois.get_fdata()==AortaSegment.DESCENDING_BOTTOM.value
 
-dynpet = nib.load(dynpet_path)
-totalseg = nib.load(totalseg_path)
+print("Extract single TACs")
+if_mu = extract_tac(dynpet, descending_bottom_voi)
+brain_mu = extract_tac(dynpet, totalseg.get_fdata()==90)
+liver_mu = extract_tac(dynpet, totalseg.get_fdata()==5)
 
-aorta_seg = totalseg.get_fdata() == 52
+print("Extract multiple tacs")
+_ = extract_multiple_tacs(dynpet,totalseg.get_fdata())
 
-print("Extracting descending VOI")
+#ROI patlak
+brain_slope, brain_intercept, X, Y = roi_patlak(brain_mu,if_mu,frame_time_middle,n_frames_linear_regression=4)
 
-tacs = []
+print("Voxel patlak")
+img_slope, img_intercept = voxel_patlak(
+    dynpet,if_mu,
+    frame_time_middle,
+    n_frames_linear_regression=6,
+    gaussian_filter_size=2, # Optional pre-patlak smoothing due to ultra-lowdose
+    axial_chunk_size=32 # Increase to speed up at the cost of RAM
+    )
 
-# for cylinder_width in [3,4,5]:
-#     for volume_ml in [2.5,0.75,1,1.25,1.5,1.75,2.25]:
-#         voi_filename = ROOT / SUBJECT_ID / "aorta_vois" / f"aorta_vois_{volume_ml:.2f}ml_{cylinder_width}vox.nii.gz"
-#         if not os.path.exists(voi_filename):
-#             try:
-#                 aorta_vois, aorta_segments = extract_aorta_vois(aorta_seg, totalseg.affine, dynpet, FrameTimesStart, t_threshold=40, volume_ml=volume_ml,cylinder_width=cylinder_width)
-#             except:
-#                 continue
-#             nib.Nifti1Image(aorta_vois.astype("uint8"),totalseg.affine).to_filename(voi_filename)
-#         else:
-#             aorta_vois = nib.load(voi_filename).get_fdata()
-        
-#         print("Extracting AIF")
-#         for seg in tqdm(AortaSegment):
-#             aorta_tac = extract_tac(dynpet, aorta_vois==seg.value)
-#             tacs.append({
-#                 "volume_ml":volume_ml,
-#                 "seg": seg.name,
-#                 "cylinder_width":cylinder_width,
-#                 "tac":list(aorta_tac)
-#             })
-# import pandas as pd
 
-aorta_vois, aorta_segments = extract_aorta_vois(aorta_seg, totalseg.affine, dynpet, FrameTimesStart, t_threshold=40, volume_ml=1,cylinder_width=3)
-aorta_tac = extract_tac(dynpet, aorta_vois==AortaSegment.DESCENDING_BOTTOM.value)
+plt.figure(figsize=(3,3))
+plt.plot(frame_time_middle,if_mu,'.-',label="input function")
+plt.plot(frame_time_middle,brain_mu,'.-',label="brain")
+plt.plot(frame_time_middle,liver_mu,'.-',label="liver")
+plt.xlabel("time (s)")
+plt.ylabel("Activity")
+plt.legend()
+plt.title("Time-activity curve")
+plt.savefig(".data/tacs.jpg",dpi=600)
 
-# df = pd.DataFrame(tacs)
-# df.to_csv("out.csv")
 
-print("Running Patlak")
-patlak_arr, intercepts_arr = voxel_patlak(dynpet,aorta_tac,ts,axial_chunk_size=64,n_frames_linear_regression=12,gaussian_filter_size=0)
+plt.figure(figsize=(3,3))
+plt.plot(X,Y,'.')
+patlak = lambda x: brain_slope*x+brain_intercept
+plt.plot([np.nanmin(X),np.nanmax(X)],[patlak(np.nanmin(X)),patlak(np.nanmax(X))])
+plt.title("Brain Patlak analysis")
+plt.savefig(".data/brain_patlak.jpg",dpi=600)
 
-print("Saving Patlak")
-nib.Nifti1Image(patlak_arr,dynpet.affine).to_filename(ROOT / SUBJECT_ID / "patlak_12.nii.gz")
-nib.Nifti1Image(intercepts_arr,dynpet.affine).to_filename(ROOT / SUBJECT_ID / "intercept.nii.gz")
+
+plt.figure()
+patlak_mip = img_slope.get_fdata().max(axis=1)
+voxel_size = img_slope.header.get_zooms()
+aspect_ratio = voxel_size[0]/voxel_size[2]
+plt.imshow(np.rot90(patlak_mip),aspect=aspect_ratio, cmap="gray_r",vmin=0,vmax=0.01)
+plt.colorbar()
+plt.axis("off")
+plt.title("Patlak Ki MIP")
+plt.savefig(".data/patlak_mip.jpg",dpi=300)
