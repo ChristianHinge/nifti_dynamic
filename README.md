@@ -82,18 +82,4 @@ img_slope, img_intercept = voxel_patlak(
     )
 ```
 
-## Generated Outputs 📊
-
-### Time-Activity Curves
-![TACs](.data/tacs.jpg)
-
-### Brain Patlak Analysis  
-![Brain Patlak](.data/brain_patlak.jpg)
-
-### Patlak Ki Maximum Intensity Projection
-![Patlak MIP](.data/patlak_mip.jpg)
-
-### Aorta VOI Visualization
-![Aorta VOIs](.data/visualization.jpg)
-
 
