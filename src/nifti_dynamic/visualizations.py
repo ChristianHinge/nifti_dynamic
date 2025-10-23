@@ -14,7 +14,6 @@ _segmentation_cmap = colors.ListedColormap([
     plt.cm.Set2(4/7),
 ])
 
-WORKING_DIR = Path("/depict/users/hinge/private/hedypet/dynamic")
 
 def _get_centerline(binary_mask_3d, projection_axis_idx):
     true_value_coords = np.where(binary_mask_3d)
@@ -97,10 +96,17 @@ def _plot_single_aorta_view(pet_array, segments_nifti, rois_nifti,
 
     pet_view_2d, segments_view_2d, rois_view_2d = None, None, None
 
+    zooms = segments_nifti.header.get_zooms()
+    if view_axis == 0:
+        aspect_ratio = zooms[2]/zooms[1]
+    elif view_axis == 1:
+        aspect_ratio = zooms[2]/zooms[0]
+    print(aspect_ratio)
     if slice_definition == "max":
         pet_view_2d = np.rot90(pet_array.max(axis=view_axis))
         segments_view_2d = np.rot90(segments_array.max(axis=view_axis))
         rois_view_2d = np.rot90(rois_array.max(axis=view_axis))
+        
     elif isinstance(slice_definition, int): 
         centerline_coords = _get_centerline(segments_array == slice_definition, view_axis)
         depth_indices = np.arange(pet_array.shape[2])
@@ -148,14 +154,13 @@ def _plot_single_aorta_view(pet_array, segments_nifti, rois_nifti,
         contours, _ = cv2.findContours(binary_segment_for_contour, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(segment_contours_mask, contours, -1, seg_val, thickness=1)
     
-    ax_raw.imshow(pet_cropped, cmap="gray_r", vmax=vmax)
+    ax_raw.imshow(pet_cropped, cmap="gray_r", vmax=vmax,aspect=aspect_ratio)
     ax_raw.set_xticks([])
     ax_raw.set_yticks([])
-
-    ax_overlay.imshow(pet_cropped, cmap="gray_r", vmax=vmax)
-    ax_overlay.imshow(segment_contours_mask, alpha=(segment_contours_mask > 0) * 1.0, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap)
-    ax_overlay.imshow(segments_cropped, alpha=(segments_cropped > 0) * 0.4, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap)
-    ax_overlay.imshow(rois_cropped, alpha=(rois_cropped > 0) * 1.0, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap)
+    ax_overlay.imshow(pet_cropped, cmap="gray_r", vmax=vmax,aspect=aspect_ratio)
+    ax_overlay.imshow(segment_contours_mask, alpha=(segment_contours_mask > 0) * 1.0, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap,aspect=aspect_ratio)
+    ax_overlay.imshow(segments_cropped, alpha=(segments_cropped > 0) * 0.4, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap,aspect=aspect_ratio)
+    ax_overlay.imshow(rois_cropped, alpha=(rois_cropped > 0) * 1.0, interpolation="nearest", vmin=1, vmax=4, cmap=_segmentation_cmap,aspect=aspect_ratio)
     ax_overlay.set_xticks([])
     ax_overlay.set_yticks([])
 

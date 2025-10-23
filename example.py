@@ -1,6 +1,6 @@
 
 from nifti_dynamic.patlak import roi_patlak, voxel_patlak
-from nifti_dynamic.utils import extract_tac, extract_multiple_tacs
+from nifti_dynamic.tacs import extract_tac, extract_multiple_tacs
 from nifti_dynamic.aorta_rois import pipeline, AortaSegment
 import nibabel as nib
 from nibabel.processing import resample_from_to
@@ -8,6 +8,7 @@ import json
 import numpy as np
 from matplotlib import pyplot as plt
 #Load dynamic pet and frame-times
+
 dynpet = nib.load(".data/dpet.nii.gz")
 
 with open(".data/dpet.json", "r") as handle:
@@ -36,9 +37,9 @@ aorta_segments, aorta_vois = pipeline(
 descending_bottom_voi = aorta_vois.get_fdata()==AortaSegment.DESCENDING_BOTTOM.value
 
 print("Extract single TACs")
-if_mu = extract_tac(dynpet, descending_bottom_voi)
-brain_mu = extract_tac(dynpet, totalseg.get_fdata()==90)
-liver_mu = extract_tac(dynpet, totalseg.get_fdata()==5)
+if_mu, if_std, if_n = extract_tac(dynpet, descending_bottom_voi)
+brain_mu, brain_std, brain_n = extract_tac(dynpet, totalseg.get_fdata()==90)
+liver_mu, liver_std, liver_n = extract_tac(dynpet, totalseg.get_fdata()==5)
 
 print("Extract multiple tacs")
 _ = extract_multiple_tacs(dynpet,totalseg.get_fdata())

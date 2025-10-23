@@ -1,9 +1,9 @@
 from scipy.ndimage import gaussian_filter
 import numpy as np
-from tqdm import tqdm
 from scipy.integrate import cumulative_simpson
 from sklearn.linear_model import LinearRegression
-from .utils import OverlappedChunkIterator, img_to_array_or_dataobj
+from .utils import OverlappedChunkIterator
+from .tacs import img_to_array_or_dataobj
 import nibabel as nib
 
 
@@ -39,10 +39,10 @@ def _voxel_patlak_chunk(arr,input_fun,t,n_frames_linear_regression=10):
 
     return slopes, intercepts
 
-def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regression=10, axial_chunk_size=8):
+def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regression=10, axial_chunk_size=8, _rich_progress=None, _rich_task=None):
     """
     Process image data in overlapping chunks, applying Gaussian smoothing and keeping only valid center portions.
-    
+
     Args:
         img: Input 4D image array
         input_fun: Input function for Patlak analysis
@@ -50,13 +50,15 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
         gaussian_std: Standard deviation for Gaussian smoothing (default: 0)
         n_frames_linear_regression: Number of frames for linear regression (default: 10)
         axial_chunk_size: Size of axial chunks to process (default: 8)
+        _rich_progress: Internal - Rich Progress object (optional)
+        _rich_task: Internal - Rich progress task ID (optional)
     """
     affine = img.affine
     img = img_to_array_or_dataobj(img)
     out = np.zeros(img.shape[:-1])
     out_intercepts = np.zeros(img.shape[:-1])
     border_size = 3 * gaussian_filter_size if gaussian_filter_size > 0 else 0
-    
+
     # Create iterator for overlapped chunks
     chunk_iterator = OverlappedChunkIterator(
         array_size=img.shape[-2],
@@ -64,22 +66,32 @@ def voxel_patlak(img, input_fun, t, gaussian_filter_size=0, n_frames_linear_regr
         border_size=border_size
     )
 
+    # Create nested progress bar if progress object provided
+    chunk_task = None
+    if _rich_progress is not None and _rich_task is not None:
+        chunk_task = _rich_progress.add_task("Processing chunks", total=len(chunk_iterator))
+
     # Process each chunk
-    for start_idx, end_idx, valid_start, valid_end, out_start, out_size in tqdm(chunk_iterator):
+    for start_idx, end_idx, valid_start, valid_end, out_start, out_size in chunk_iterator:
         # Extract and process chunk
         chunk = img[..., start_idx:end_idx, -n_frames_linear_regression:]
-        
+
         # Apply Gaussian filter if needed
         if gaussian_filter_size > 0:
             chunk = gaussian_filter(chunk, sigma=[gaussian_filter_size, gaussian_filter_size, gaussian_filter_size, 0])
-        
+
         # Process only the valid portion
         valid_chunk = chunk[..., valid_start:valid_end, :]
         slopes, intercepts = _voxel_patlak_chunk(valid_chunk, input_fun, t, n_frames_linear_regression)
-        
+
         # Store results
         out[..., out_start:out_start + out_size] = slopes
         out_intercepts[..., out_start:out_start + out_size] = intercepts
+
+        # Update nested progress
+        if chunk_task is not None:
+            _rich_progress.advance(chunk_task)
+
     out = nib.Nifti1Image(out,affine=affine)
     out_intercepts = nib.Nifti1Image(out_intercepts,affine=affine)
     return out, out_intercepts

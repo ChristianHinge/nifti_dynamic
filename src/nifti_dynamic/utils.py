@@ -1,10 +1,8 @@
+"""Utility functions for dynamic PET image processing."""
+
 import numpy as np
-import nibabel as nib
-from collections import defaultdict
-from tqdm import tqdm
 from pathlib import Path
-import os 
-import csv 
+import json 
 
 
 class OverlappedChunkIterator:
@@ -73,153 +71,173 @@ class OverlappedChunkIterator:
         
         return (start_idx, end_idx, valid_start, valid_end, output_start, output_size)
 
-def img_to_array_or_dataobj(img):
-    if isinstance(img, nib.nifti1.Nifti1Image):
-        return img.dataobj
-    elif isinstance(img, np.ndarray):
-        return img
-    elif isinstance(img,nib.arrayproxy.ArrayProxy):
-        return img
-    elif isinstance(img,Path) or isinstance(img,str):
-        return nib.load(img).dataobj
+def get_sidecar_path(pet_path, sidecar_path=None):
+    """Determine sidecar JSON path from PET image path.
+
+    Args:
+        pet_path: Path to PET image
+        sidecar_path: Optional explicit sidecar path
+
+    Returns:
+        Path to sidecar JSON file
+
+    Raises:
+        SystemExit: If sidecar file does not exist
+    """
+    import sys
+
+    pet_path = Path(pet_path)
+
+    if sidecar_path is None:
+        sidecar_path = pet_path.with_suffix(".json")
+        if pet_path.suffix == ".gz":
+            sidecar_path = pet_path.with_suffix("").with_suffix(".json")
+
+        if not sidecar_path.exists():
+            print(f"Error: Sidecar JSON not found: {sidecar_path}", file=sys.stderr)
+            print(f"Please specify --sidecar explicitly", file=sys.stderr)
+            sys.exit(1)
     else:
-        raise ValueError("Input must be a Nifti1Image or a numpy array.")
+        sidecar_path = Path(sidecar_path)
+        if not sidecar_path.exists():
+            print(f"Error: Sidecar JSON not found: {sidecar_path}", file=sys.stderr)
+            sys.exit(1)
 
-# def extract_tac(img, seg, max_roi_size=None):
-#     img = img_to_array_or_dataobj(img)
-#     seg = seg > 0
-#     nonzero = np.nonzero(seg)
-#     # Get min and max for each dimension
-#     xmin, xmax = np.min(nonzero[0]), np.max(nonzero[0])
-#     ymin, ymax = np.min(nonzero[1]), np.max(nonzero[1])
-#     zmin, zmax = np.min(nonzero[2]), np.max(nonzero[2])
-
-#     if max_roi_size is not None and (xmax-xmin)*(ymax-ymin)*(zmax-zmin) > max_roi_size:
-#         raise ValueError("Segmentation too big, use extract_multiple:tacs")
-
-#     seg_bb = img[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1,:]
-#     tac = seg_bb[seg[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1],:].mean(axis=0)
-
-#     return tac
-
-def extract_tac(img, seg, max_roi_size=None, return_std_n=False):
-    img = img_to_array_or_dataobj(img)
-    seg = seg > 0
-    nonzero = np.nonzero(seg)
-    # Get min and max for each dimension
-    xmin, xmax = np.min(nonzero[0]), np.max(nonzero[0])
-    ymin, ymax = np.min(nonzero[1]), np.max(nonzero[1])
-    zmin, zmax = np.min(nonzero[2]), np.max(nonzero[2])
-
-    ## Vectorized operations can use a lot of memory.
-    if max_roi_size is not None and (xmax-xmin)*(ymax-ymin)*(zmax-zmin)*img.shape[-1] > max_roi_size:
-        raise ValueError("Segmentation too big, use extract_multiple_tacs")
-
-    img_bb = img[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1,:]
-    img_masked = img_bb[seg[xmin:xmax+1, ymin:ymax+1, zmin:zmax+1],:]
-    tac_mean = img_masked.mean(axis=0)
-
-    if return_std_n:
-        tac_std = img_masked.std(axis=0)
-        n_voxels = np.array([seg.sum()]*len(tac_mean))
-        return tac_mean, tac_std, n_voxels
-    else:
-        return tac_mean
+    return sidecar_path
 
 
+def load_frame_times(sidecar_path):
+    """Load frame timing information from BIDS sidecar JSON.
 
-def extract_multiple_tacs(img, seg, max_roi_size_factor=2, return_std_n=False):
-    img = img_to_array_or_dataobj(img)
+    Args:
+        sidecar_path: Path to sidecar JSON file
 
-    #handle static images
-    if img.ndim == 3:
-        img = np.asanyarray(img)
-        img = img[:,:,:,np.newaxis]
-
-    n_frames = img.shape[-1]
-    
-    targets = list(np.unique(seg))
-    if 0 in targets:
-        targets.remove(0)
-    
-    tacs_mean = {int(x):[] for x in targets}
-    tacs_std = {int(x):[] for x in targets}
-    tacs_n = {int(x):[] for x in targets}
-
-    #Try 4D cropping - faster but uses too much memory for larger organs
-
-    max_roi_size = max_roi_size_factor*np.prod(seg.shape)
-    for k in tqdm(tacs_mean):
-        try: 
-            tacs_mean[k], tacs_std[k], tacs_n[k] = extract_tac(img,seg==k,max_roi_size=max_roi_size,return_std_n=True)
-            targets.remove(k)
-        except ValueError as e:
-            print("label",k,"too large - will run without 4D cropping")
-            continue
-
-    #Iterate through each frame - slower but uses less memory
-    if len(targets) > 0:
-        for i in tqdm(range(n_frames)):
-            frame = img[...,i]
-            for k in targets:
-                seg_target = seg==k
-                arr = frame[seg_target]
-                tacs_mean[k].append(arr.mean())
-                tacs_std[k].append(arr.mean())
-                tacs_n[k].append(seg_target.sum())
-
-        for k in targets:
-            tacs_mean[k] = np.array(tacs_mean[k])
-            tacs_std[k] = np.array(tacs_std[k])
-            tacs_n[k] = np.array(tacs_n[k])
-
-    if return_std_n:
-        return tacs_mean, tacs_std, tacs_n
-    else:
-        return tacs_mean
+    Returns:
+        frame_times_start: Array of frame start times in seconds
+        frame_duration: Array of frame durations in seconds
+        frame_time_middle: Array of frame middle times in seconds
+    """
+    sidecar_path = Path(sidecar_path)
+    with open(sidecar_path, 'r') as f:
+        sidecar = json.load(f)
+        frame_times_start = np.array(sidecar["FrameTimesStart"])
+        frame_duration = np.array(sidecar["FrameDuration"])
+        frame_time_middle = frame_times_start + frame_duration / 2
+    return frame_times_start, frame_duration, frame_time_middle
 
 
-def save_tac(filename, tac_mean,tac_std = None, n_voxels = None):
-    filename = Path(filename)
-    os.makedirs(filename.parent,exist_ok=True)
-    data = {
-        "mu": [float(x) for x in tac_mean],
-        "std": [float(x) if tac_std is not None else None for x in tac_std],
-        "n": [int(x) if n_voxels is not None else None for x in n_voxels],
-    }
-    
-    with open(filename, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(data.keys()) # Write headers
-        writer.writerows(zip(*data.values())) # Write data rows
+def downsample_dynamic_pet_2x(input_path, output_path, use_gpu=False, _rich_progress=None, _rich_task=None):
+    """Downsample dynamic PET image by 2x2x2 using mean pooling.
 
-def load_tac(filename):
-    with open(filename, 'r', newline='') as f:
-        reader = csv.reader(f)
-        headers = next(reader) # Read header row
-        read_dict = {header: list(column) for header, column in zip(headers, zip(*reader))}
-    return np.array(read_dict["mu"]).astype(float), np.array(read_dict["std"]).astype(float), np.array(read_dict["n"]).astype(int)
+    Fast downsampling using NumPy's reshape trick for mean pooling.
+    Processes frame-by-frame to minimize memory usage.
 
-def _pooled_mean_variance(mu1,mu2,n1,n2,v1,v2):
-    n_comb = n1+n2
-    mu_comb = (mu1*n1+mu2*n2)/(n_comb)
-    var_comb = (n1*v1+n2*v2)/n_comb+n1*n2*np.square((mu1-mu2)/n_comb)
-    return np.nan_to_num(mu_comb), np.nan_to_num(var_comb), n_comb
+    Args:
+        input_path: Path to input 4D PET image
+        output_path: Path for output downsampled image
+        use_gpu: Unused (kept for API compatibility)
+        _rich_progress: Internal - Rich Progress object (optional)
+        _rich_task: Internal - Rich progress task ID (optional)
 
-def combine_tacs(tacs_paths, tacs_output_path):
-    comb_mu = comb_var = comb_n = 0
+    Returns:
+        output_img: The downsampled NIfTI image
 
-    for tac_p in tacs_paths:
-        mu, std, n = load_tac(tac_p)
-        comb_mu, comb_var, comb_n = _pooled_mean_variance(mu,comb_mu,n,comb_n,np.square(std),comb_var)
+    Example:
+        downsample_dynamic_pet_2x("dpet.nii.gz", "dpet_2x.nii.gz")
+    """
+    import nibabel as nib
+    import tempfile
 
-    save_tac(tacs_output_path,comb_mu,np.sqrt(comb_var),comb_n)
+    input_path = Path(input_path)
+    output_path = Path(output_path)
 
-def load_and_combine_tacs(tacs_paths):
-    comb_mu = comb_var = comb_n = 0
+    # Load input image
+    input_img = nib.load(str(input_path))
 
-    for tac_p in tacs_paths:
-        mu, std, n = load_tac(tac_p)
-        comb_mu, comb_var, comb_n = _pooled_mean_variance(mu,comb_mu,n,comb_n,np.square(std),comb_var)
+    if len(input_img.shape) != 4:
+        raise ValueError(f"Expected 4D image, got {len(input_img.shape)}D")
 
-    return comb_mu,np.sqrt(comb_var),comb_n
+    n_frames = input_img.shape[3]
+    in_shape = input_img.shape[:3]
+
+    # Calculate output shape (divide by 2, floor)
+    out_shape = tuple(s // 2 for s in in_shape)
+
+    # Create memory-mapped array for output
+    output_shape = out_shape + (n_frames,)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.dat')
+    temp_file.close()
+
+    output_data = np.memmap(temp_file.name, dtype=np.float32, mode='w+', shape=output_shape)
+
+    # Create progress bar
+    frame_task = None
+    if _rich_progress is not None:
+        frame_task = _rich_progress.add_task("Downsampling frames", total=n_frames)
+
+    # Timing accumulators
+    import time
+    time_load = 0
+    time_pool = 0
+    time_save = 0
+
+    # Process each frame
+    for i in range(n_frames):
+        # Load frame (no copy - use dataobj directly)
+        t0 = time.time()
+        frame = input_img.dataobj[..., i]
+        time_load += time.time() - t0
+
+        # Apply 2x2x2 mean pooling with stride 2
+        t0 = time.time()
+        # Crop to even dimensions first
+        frame_cropped = frame[:out_shape[0]*2, :out_shape[1]*2, :out_shape[2]*2]
+
+        # Reshape and mean over 2x2x2 blocks
+        downsampled = frame_cropped.reshape(
+            out_shape[0], 2,
+            out_shape[1], 2,
+            out_shape[2], 2
+        ).mean(axis=(1, 3, 5))
+        time_pool += time.time() - t0
+
+        # Save to memmap
+        t0 = time.time()
+        output_data[..., i] = downsampled
+        time_save += time.time() - t0
+
+        # Flush periodically
+        if i % 8 == 0:
+            output_data.flush()
+
+        if frame_task is not None:
+            _rich_progress.advance(frame_task)
+
+    # Print timing breakdown
+    print(f"\nTiming breakdown ({n_frames} frames):")
+    print(f"  Load from disk:    {time_load:.3f}s ({time_load/n_frames*1000:.1f}ms/frame)")
+    print(f"  NumPy pooling:     {time_pool:.3f}s ({time_pool/n_frames*1000:.1f}ms/frame)")
+    print(f"  Save to memmap:    {time_save:.3f}s ({time_save/n_frames*1000:.1f}ms/frame)")
+    print(f"  Total:             {time_load+time_pool+time_save:.3f}s")
+
+    # Final flush
+    output_data.flush()
+
+    # Update affine to reflect 2x voxel size
+    new_affine = input_img.affine.copy()
+    new_affine[:3, :3] *= 2  # Double voxel size
+
+    # Create output image
+    output_img = nib.Nifti1Image(output_data, new_affine)
+
+    # Save to disk
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(output_img, str(output_path))
+
+    # Clean up
+    del output_data
+    Path(temp_file.name).unlink()
+
+    return nib.load(str(output_path))
+
+

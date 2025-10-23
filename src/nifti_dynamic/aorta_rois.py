@@ -14,7 +14,7 @@ from scipy.ndimage import (
     median_filter
 )
 
-from nifti_dynamic.utils import img_to_array_or_dataobj
+from nifti_dynamic.tacs import img_to_array_or_dataobj
 from nifti_dynamic.visualizations import plot_aorta_visualizations
 from enum import Enum
 
