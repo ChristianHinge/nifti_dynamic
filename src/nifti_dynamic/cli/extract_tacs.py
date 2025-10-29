@@ -64,7 +64,7 @@ def extract_tacs(
     print(f"Saving {len(tacs_mean)} TAC files...")
     for label in tacs_mean.keys():
         tac_filename = output / f"tac_label_{label:03d}.csv"
-        save_tac(tac_filename, tacs_mean[label], tacs_std[label], tacs_n[label], time=frame_time_middle)
+        save_tac(tac_filename, tacs_mean[label], tacs_std[label], tacs_n[label], frame_times_start, frame_duration)
 
     print(f"Completed: {output} ({len(tacs_mean)} TACs saved)")
 

@@ -21,6 +21,7 @@ def extract_input_function(
     sidecar: Annotated[Optional[Path], typer.Option(exists=True, file_okay=True, dir_okay=False, help="Sidecar JSON with frame timing (defaults to PET path with .json)")] = None,
     segment: Annotated[SegmentChoice, typer.Option(help="Aorta segment to extract VOI from")] = SegmentChoice.DESCENDING_BOTTOM,
     volume: Annotated[float, typer.Option(help="VOI volume in milliliters")] = 1.0,
+    full_length: Annotated[bool, typer.Option("--full-length", help="Use full length of aorta segment (ignores volume)")] = False,
     cylinder_width: Annotated[int, typer.Option(help="ROI cylinder width in pixels")] = 3,
     aorta_index: Annotated[int, typer.Option(help="Aorta label index in TotalSegmentator output")] = 52,
     skip_visualization: Annotated[bool, typer.Option(help="Skip generating visualization image")] = False,
@@ -95,6 +96,7 @@ def extract_input_function(
             frame_times_start=frame_times_start,
             cylinder_width=cylinder_width,
             volume_ml=volume,
+            use_full_length=full_length,
             segment=segment_enum,
             image_path=visualization_path
         )
@@ -112,9 +114,12 @@ def extract_input_function(
         nib.save(aorta_vois, str(output / "aorta_vois.nii.gz"))
 
         # Save TAC with time information
-        tac_filename = f"input_fun_{segment_str}_{volume}ml_{cylinder_width}px.csv"
+        if full_length:
+            tac_filename = f"input_fun_{segment_str}_full_length_{cylinder_width}px.csv"
+        else:
+            tac_filename = f"input_fun_{segment_str}_{volume}ml_{cylinder_width}px.csv"
         tac_path = output / tac_filename
-        save_tac(tac_path, tac_mean, tac_std, n_voxels, time=frame_time_middle)
+        save_tac(tac_path, tac_mean, tac_std, n_voxels, frame_times_start, frame_duration)
         progress.advance(task)
 
     print(f"Completed: {output}")

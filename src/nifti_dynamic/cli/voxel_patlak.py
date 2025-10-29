@@ -50,15 +50,21 @@ def run_voxel_patlak(
         with open(input_function, 'r', newline='') as f:
             reader = csv.reader(f)
             headers = next(reader)
-
-            # Check for required columns
-            if 'time' not in headers or 'mu' not in headers:
-                print(f"Error: Input function CSV must have 'time' and 'mu' columns", file=sys.stderr)
-                sys.exit(1)
-
             data = {header: list(column) for header, column in zip(headers, zip(*reader))}
-            frame_times = np.array(data["time"]).astype(float)
-            if_tac = np.array(data["mu"]).astype(float)
+
+            # Handle new format with time_start and time_end
+            if 'time_start [s]' in headers:
+                frame_times_start = np.array(data["time_start [s]"]).astype(float)
+                time_end = np.array(data["time_end [s]"]).astype(float)
+                frame_times = (frame_times_start + time_end) / 2  # Use middle time for Patlak
+                if_tac = np.array(data["mean"]).astype(float)
+            # Handle old format with time column
+            elif 'time' in headers and 'mu' in headers:
+                frame_times = np.array(data["time"]).astype(float)
+                if_tac = np.array(data["mu"]).astype(float)
+            else:
+                print(f"Error: Input function CSV must have either 'time_start [s]' or 'time' column", file=sys.stderr)
+                sys.exit(1)
 
         if len(if_tac) != n_frames:
             print(f"Error: Input function has {len(if_tac)} frames but PET has {n_frames} frames", file=sys.stderr)

@@ -106,10 +106,10 @@ def segment_aorta(aorta):
     return aorta_seg.astype(np.uint8)
 
 
-def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, cylinder_width=3):
+def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, use_full_length=False, cylinder_width=3):
     """
     Create a cylindrical VOI inside the specified aorta segment
-    
+
     Parameters:
     -----------
     aorta_segment : numpy.ndarray
@@ -119,10 +119,12 @@ def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, cylind
     voxel_size : tuple or array-like
         Voxel dimensions in mm
     volume_ml : float
-        Target volume in milliliters (default: 1.0)
+        Target volume in milliliters (default: 1.0, ignored if use_full_length=True)
+    use_full_length : bool
+        If True, use the full length of the aorta segment (default: False)
     cylinder_width : int
         Width of the cylindrical cross-section (default: 3)
-        
+
     Returns:
     --------
     numpy.ndarray
@@ -130,29 +132,34 @@ def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, cylind
     """
     # Calculate target volume in voxels
     voxel_volume = np.prod(voxel_size)
-    target_voxels = int(volume_ml * 1000 / voxel_volume)
     
     # Create empty VOI
     voi = np.zeros_like(aorta_segment, dtype=bool)
     
     # Calculate required slices for target volume
     voxels_per_slice = cylinder_width**2
-    n_slices_needed = max(1, int(np.ceil(target_voxels / voxels_per_slice)))
 
     # Find optimal placement based on PET uptake
     pet_masked = np.ma.masked_array(data=pet, mask=~aorta_segment)
     median_axial_uptake = np.ma.median(pet_masked, axis=(0,1)).filled(0)
-    median_axial_uptake = uniform_filter(median_axial_uptake, n_slices_needed)
     
     #Ensure that the start_slice lies sufficiently in the middle of the aorta segment
     aorta_axial_mask_ixs = np.where(np.any(aorta_segment,axis=(0,1)))[0]
     axial_ix_min, axial_ix_max = np.min(aorta_axial_mask_ixs), np.max(aorta_axial_mask_ixs)
-    if axial_ix_max-axial_ix_min < n_slices_needed:
-        raise Exception(f"The requested cylinder is too long {n_slices_needed} for the aorta segment {axial_ix_max-axial_ix_min}. Either reduce the cylinder volume or increase the cylinder width")
-    median_axial_uptake[:axial_ix_min + n_slices_needed//2 ] = 0
-    median_axial_uptake[ axial_ix_max - n_slices_needed//2:] = 0
 
-    start_slice = np.argmax(median_axial_uptake) - n_slices_needed//2
+    if use_full_length:
+        start_slice, n_slices_needed = axial_ix_min, axial_ix_max-axial_ix_min
+    else:
+        target_voxels = int(volume_ml * 1000 / voxel_volume)
+        n_slices_needed = max(1, int(np.ceil(target_voxels / voxels_per_slice)))
+        median_axial_uptake = uniform_filter(median_axial_uptake, n_slices_needed)
+
+        if axial_ix_max-axial_ix_min < n_slices_needed:
+            raise Exception(f"The requested cylinder is too long {n_slices_needed} for the aorta segment {axial_ix_max-axial_ix_min}. Either reduce the cylinder volume or increase the cylinder width")
+        median_axial_uptake[:axial_ix_min + n_slices_needed//2 ] = 0
+        median_axial_uptake[ axial_ix_max - n_slices_needed//2:] = 0
+
+        start_slice = np.argmax(median_axial_uptake) - n_slices_needed//2
 
     # Place VOI seeds at center of mass for each slice
     pet_masked = pet_masked.filled(0)
@@ -167,8 +174,11 @@ def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, cylind
     
     # Calculate actual volume achieved
     actual_volume_ml = np.sum(voi) * voxel_volume / 1000
-    print(f"Created cylinder of length {n_slices_needed} with volume: {actual_volume_ml:.2f} ml (target: {volume_ml:.2f} ml)")
-    
+    if use_full_length:
+        print(f"Created cylinder of full length {n_slices_needed} with volume: {actual_volume_ml:.2f} ml")
+    else:
+        print(f"Created cylinder of length {n_slices_needed} with volume: {actual_volume_ml:.2f} ml (target: {volume_ml:.2f} ml)")
+
     return voi
 
 
@@ -240,10 +250,10 @@ def extract_aorta_segments(aorta_mask, pet):
     return nib.Nifti1Image(aorta_segments.astype("int16"),affine)
     
 
-def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, cylinder_width=3,segment=None):
+def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, use_full_length=False, cylinder_width=3, segment=None):
     """
     Extract VOIs from different aorta segments
-    
+
     Parameters:
     -----------
     aorta_mask : numpy.ndarray
@@ -257,10 +267,12 @@ def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, cylinder_width=3,segm
     t_threshold : int
         Time threshold for early frames in seconds (default: 40)
     volume_ml : float
-        Target volume in milliliters (default: 1.0)
+        Target volume in milliliters (default: 1.0, ignored if use_full_length=True)
+    use_full_length : bool
+        If True, use the full length of the aorta segment (default: False)
     cylinder_width : int
         Width of the cylindrical cross-section (default: 3)
-        
+
     Returns:
     --------
     tuple
@@ -285,12 +297,12 @@ def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, cylinder_width=3,segm
         aorta_segment = aorta_segments_arr == seg.value
         print("Extracting VOI for", seg.name)
         if seg == AortaSegment.TOP:
-            voi = create_cylindrical_voi(aorta_segment.swapaxes(1,2), pet.swapaxes(1,2), voxel_size=voxel_size[[0,2,1]], 
-                                        volume_ml=volume_ml, cylinder_width=cylinder_width)
+            voi = create_cylindrical_voi(aorta_segment.swapaxes(1,2), pet.swapaxes(1,2), voxel_size=voxel_size[[0,2,1]],
+                                        volume_ml=volume_ml, use_full_length=use_full_length, cylinder_width=cylinder_width)
             voi = voi.swapaxes(1,2)
         else:
-            voi = create_cylindrical_voi(aorta_segment, pet, voxel_size=voxel_size, 
-                                        volume_ml=volume_ml, cylinder_width=cylinder_width)
+            voi = create_cylindrical_voi(aorta_segment, pet, voxel_size=voxel_size,
+                                        volume_ml=volume_ml, use_full_length=use_full_length, cylinder_width=cylinder_width)
         vois[voi] = seg.value
 
 
@@ -298,10 +310,10 @@ def extract_aorta_vois(aorta_segments, pet, volume_ml=1.0, cylinder_width=3,segm
     return vois
 
 
-def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0, cylinder_width=3, segment=None, image_path=None):
+def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0, use_full_length=False, cylinder_width=3, segment=None, image_path=None):
     """
     Extract VOIs from different aorta segments
-    
+
     Parameters:
     -----------
     aorta_mask : numpy.ndarray
@@ -315,10 +327,12 @@ def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0,
     t_threshold : int
         Time threshold for early frames in seconds (default: 40)
     volume_ml : float
-        Target volume in milliliters (default: 1.0)
+        Target volume in milliliters (default: 1.0, ignored if use_full_length=True)
+    use_full_length : bool
+        If True, use the full length of the aorta segment (default: False)
     cylinder_width : int
         Width of the cylindrical cross-section (default: 3)
-        
+
     Returns:
     --------
     tuple
@@ -326,7 +340,7 @@ def pipeline(aorta_mask, dpet, frame_times_start, t_threshold=40, volume_ml=1.0,
     """
     pet = average_early_pet_frames(dpet, frame_times_start, t_threshold)
     aorta_segments = extract_aorta_segments(aorta_mask,pet)
-    aorta_vois = extract_aorta_vois(aorta_segments,pet,volume_ml=volume_ml,cylinder_width=cylinder_width,segment=segment)
+    aorta_vois = extract_aorta_vois(aorta_segments, pet, volume_ml=volume_ml, use_full_length=use_full_length, cylinder_width=cylinder_width, segment=segment)
     
     if image_path is not None:
         plot_aorta_visualizations(

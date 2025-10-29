@@ -139,23 +139,26 @@ def extract_multiple_tacs(img, seg, max_roi_size_factor=2, _rich_progress=None, 
 
     return tacs_mean, tacs_std, tacs_n
 
-
-def save_tac(filename, tac_mean, tac_std, n_voxels, time):
-    """Save TAC to CSV file with time, mu, std, n_voxels columns.
+def save_tac(filename, tac_mean, tac_std, n_voxels, frame_times_start, frame_duration):
+    """Save TAC to CSV file with time_start, time_end, mean, std, n_voxels columns.
 
     Args:
         filename: Output CSV file path
         tac_mean: Mean TAC values
         tac_std: Standard deviation TAC values
         n_voxels: Number of voxels per timepoint
-        time: Time points in seconds
+        frame_times_start: Frame start times in seconds
+        frame_duration: Frame durations in seconds
     """
     filename = Path(filename)
     os.makedirs(filename.parent, exist_ok=True)
 
+    time_end = frame_times_start + frame_duration
+
     data = {
-        "time": [float(x) for x in time],
-        "mu": [float(x) for x in tac_mean],
+        "time_start [s]": [float(x) for x in frame_times_start],
+        "time_end [s]": [float(x) for x in time_end],
+        "mean": [float(x) for x in tac_mean],
         "std": [float(x) for x in tac_std],
         "n_voxels": [int(x) for x in n_voxels],
     }
@@ -170,7 +173,8 @@ def load_tac(filename):
     """Load TAC from CSV file.
 
     Returns:
-        time: Time points
+        frame_times_start: Frame start times in seconds
+        frame_duration: Frame durations in seconds
         tac_mean: Mean TAC values
         tac_std: Standard deviation TAC values
         n_voxels: Number of voxels per timepoint
@@ -180,12 +184,36 @@ def load_tac(filename):
         headers = next(reader)  # Read header row
         read_dict = {header: list(column) for header, column in zip(headers, zip(*reader))}
 
-    time = np.array(read_dict["time"]).astype(float) if "time" in read_dict else None
-    tac_mean = np.array(read_dict["mu"]).astype(float)
-    tac_std = np.array(read_dict["std"]).astype(float)
+    # Handle new format with time_start and time_end
+    if "time_start [s]" in read_dict:
+        frame_times_start = np.array(read_dict["time_start [s]"]).astype(float)
+        time_end = np.array(read_dict["time_end [s]"]).astype(float)
+        frame_duration = time_end - frame_times_start
+        tac_mean = np.array(read_dict["mean"]).astype(float)
+        tac_std = np.array(read_dict["std"]).astype(float)
+    # Handle old format with time column
+    elif "time" in read_dict:
+        # For backward compatibility - assume old format used middle time
+        # We can't recover exact start/duration from middle time alone
+        time_middle = np.array(read_dict["time"]).astype(float)
+        # Estimate duration from differences (assuming uniform spacing for last frame)
+        if len(time_middle) > 1:
+            durations = np.diff(time_middle)
+            frame_duration = np.append(durations, durations[-1])
+            frame_times_start = time_middle - frame_duration / 2
+        else:
+            # Single frame - can't determine duration
+            frame_times_start = time_middle
+            frame_duration = np.array([0.0])
+
+        tac_mean = np.array(read_dict["mu"]).astype(float)
+        tac_std = np.array(read_dict["std"]).astype(float)
+    else:
+        raise ValueError("TAC file must contain either 'time_start [s]' or 'time' column")
+
     n_voxels = np.array(read_dict["n_voxels" if "n_voxels" in read_dict else "n"]).astype(int)
 
-    return time, tac_mean, tac_std, n_voxels
+    return frame_times_start, frame_duration, tac_mean, tac_std, n_voxels
 
 
 def _pooled_mean_variance(mu1, mu2, n1, n2, v1, v2):
@@ -213,17 +241,20 @@ def combine_tacs(tacs_paths, tacs_output_path):
         tacs_output_path: Output path for combined TAC
     """
     comb_mu = comb_var = comb_n = 0
-    time = None
+    frame_times_start = None
+    frame_duration = None
 
     for tac_p in tacs_paths:
-        t, mu, std, n = load_tac(tac_p)
-        if time is None:
-            time = t
+        t_start, t_dur, mu, std, n = load_tac(tac_p)
+        if frame_times_start is None:
+            frame_times_start = t_start
+            frame_duration = t_dur
         else:
-            assert np.allclose(time, t), f"Time points do not match when combining TACs from {tac_p}"
+            assert np.allclose(frame_times_start, t_start), f"Frame start times do not match when combining TACs from {tac_p}"
+            assert np.allclose(frame_duration, t_dur), f"Frame durations do not match when combining TACs from {tac_p}"
         comb_mu, comb_var, comb_n = _pooled_mean_variance(mu, comb_mu, n, comb_n, np.square(std), comb_var)
 
-    save_tac(tacs_output_path, comb_mu, np.sqrt(comb_var), comb_n, time=time)
+    save_tac(tacs_output_path, comb_mu, np.sqrt(comb_var), comb_n, frame_times_start, frame_duration)
 
 
 def load_and_combine_tacs(tacs_paths):
@@ -233,20 +264,24 @@ def load_and_combine_tacs(tacs_paths):
         tacs_paths: List of paths to TAC CSV files
 
     Returns:
-        time: Time points
+        frame_times_start: Frame start times in seconds
+        frame_duration: Frame durations in seconds
         tac_mean: Combined mean TAC
         tac_std: Combined standard deviation
         n_voxels: Combined number of voxels
     """
     comb_mu = comb_var = comb_n = 0
-    time = None
+    frame_times_start = None
+    frame_duration = None
 
     for tac_p in tacs_paths:
-        t, mu, std, n = load_tac(tac_p)
-        if time is None:
-            time = t
+        t_start, t_dur, mu, std, n = load_tac(tac_p)
+        if frame_times_start is None:
+            frame_times_start = t_start
+            frame_duration = t_dur
         else:
-            assert np.allclose(time, t), f"Time points do not match when combining TACs from {tac_p}"
+            assert np.allclose(frame_times_start, t_start), f"Frame start times do not match when combining TACs from {tac_p}"
+            assert np.allclose(frame_duration, t_dur), f"Frame durations do not match when combining TACs from {tac_p}"
         comb_mu, comb_var, comb_n = _pooled_mean_variance(mu, comb_mu, n, comb_n, np.square(std), comb_var)
 
-    return time, comb_mu, np.sqrt(comb_var), comb_n
+    return frame_times_start, frame_duration, comb_mu, np.sqrt(comb_var), comb_n
