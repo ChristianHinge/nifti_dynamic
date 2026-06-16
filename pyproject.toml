@@ -9,20 +9,14 @@ description = "A package for dynamic NIFTI analysis"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "numpy",
     "nibabel",
     "indexed_gzip",
     "scipy",
     "scikit-learn",
     "tqdm",
-    "ipython>=8.12.3",
-    "scikit-image>=0.21.0",
-    "matplotlib>=3.7.5",
-    "pandas>=2.0.3",
-    "opencv-python>=4.12.0.88",
-    "rich",
-    "typer",
-    "torch>=2.5.1",
+    "scikit-image",
+    "matplotlib",
+    "opencv-python",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
