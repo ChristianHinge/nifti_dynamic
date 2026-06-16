@@ -50,14 +50,6 @@ voxel_patlak \
   --output ./patlak
 ```
 
-### Downsample Dynamic PET (2x)
-
-```bash
-resample_pet \
-  --pet dpet.nii.gz \
-  --output dpet_2x.nii.gz
-```
-
 ## Python API Usage
 
 For programmatic access, see [example.py](example.py) for detailed Python API usage.

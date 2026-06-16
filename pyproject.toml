@@ -33,4 +33,3 @@ packages = ["nifti_dynamic", "nifti_dynamic.cli"]
 extract_input_function = "nifti_dynamic.cli.extract_input_function:cli_extract_input_function"
 voxel_patlak = "nifti_dynamic.cli.voxel_patlak:cli_voxel_patlak"
 extract_tacs = "nifti_dynamic.cli.extract_tacs:cli_extract_tacs"
-resample_pet = "nifti_dynamic.cli.resample_pet:cli_resample_pet"
