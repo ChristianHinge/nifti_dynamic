@@ -101,7 +101,6 @@ def _plot_single_aorta_view(pet_array, segments_nifti, rois_nifti,
         aspect_ratio = zooms[2]/zooms[1]
     elif view_axis == 1:
         aspect_ratio = zooms[2]/zooms[0]
-    print(aspect_ratio)
     if slice_definition == "max":
         pet_view_2d = np.rot90(pet_array.max(axis=view_axis))
         segments_view_2d = np.rot90(segments_array.max(axis=view_axis))

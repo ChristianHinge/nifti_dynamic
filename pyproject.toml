@@ -17,6 +17,7 @@ dependencies = [
     "scikit-image",
     "matplotlib",
     "opencv-python",
+    "rich>=14.3.4",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
