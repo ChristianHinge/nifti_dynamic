@@ -41,6 +41,8 @@ def extract_tac(img, seg, max_roi_size=None):
         tac_std: Standard deviation TAC values
         n_voxels: Number of voxels (constant across timepoints)
     """
+    assert img.shape[:3] == seg.shape[:3] , "Image and segmentation must have the same spatial dimensions. " + \
+        f"Got img shape {img.shape} and seg shape {seg.shape}."
     img = img_to_array_or_dataobj(img)
     seg = seg > 0
     nonzero = np.nonzero(seg)
@@ -152,7 +154,12 @@ def save_tac(filename, tac_mean, tac_std, n_voxels, frame_times_start, frame_dur
     """
     filename = Path(filename)
     os.makedirs(filename.parent, exist_ok=True)
+    if not isinstance(frame_times_start, np.ndarray):
+        frame_times_start = np.array(frame_times_start)
 
+    if not isinstance(frame_duration, np.ndarray):
+        frame_duration = np.array(frame_duration)
+        
     time_end = frame_times_start + frame_duration
 
     data = {

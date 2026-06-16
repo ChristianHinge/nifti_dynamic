@@ -17,6 +17,7 @@ from scipy.ndimage import (
 from nifti_dynamic.tacs import img_to_array_or_dataobj
 from nifti_dynamic.visualizations import plot_aorta_visualizations
 from enum import Enum
+from scipy.ndimage import binary_fill_holes
 
 class AortaSegment(Enum):
     ASCENDING = 1
@@ -27,7 +28,7 @@ class AortaSegment(Enum):
 
 def count_connected_components(slice_2d):
     """Count connected components in a 2D slice"""
-    labeled, num = label(slice_2d)
+    labeled, num = label(slice_2d,structure=np.ones((3,3)))
     return num
 
 
@@ -65,6 +66,7 @@ def find_aortic_segments_boundaries(aorta_volume):
     return ix_start, ix_curve
 
 def maybe_fix_floaters(aorta):
+    
     print("WARNING: Aorta is discontinuous, discarding smallest islands. Please inspect visually")
     labeled, _ = label(aorta)
     if len(np.unique(labeled)) > 2:
@@ -73,6 +75,27 @@ def maybe_fix_floaters(aorta):
         ix_largest_island = np.argmax(frequencies[1:])+1
         labeled = labeled==ix_largest_island
     return labeled
+
+
+def label_aorta_seg(aorta_seg):
+    
+    labeled, _ = label(aorta_seg)
+    if labeled.max()>2:
+        frequencies = np.bincount(labeled.flatten())
+        ix_smallest_island = np.argsort(frequencies[1:])[:-2]+1
+        aorta_seg[np.isin(labeled,ix_smallest_island)]=0
+        labeled,_=label(aorta_seg)
+
+    # Determine which label is ascending vs descending based on volume
+    if np.sum(labeled == 1) > np.sum(labeled == 2):
+        mapping = np.array([0, AortaSegment.DESCENDING.value, AortaSegment.ASCENDING.value])
+    else:
+        mapping = np.array([0, AortaSegment.ASCENDING.value, AortaSegment.DESCENDING.value])
+    
+    aorta_seg = mapping[labeled]
+    
+    # Mark top section
+    return aorta_seg
 
 def segment_aorta(aorta):
     # Segment aorta into four anatomical regions
@@ -86,22 +109,13 @@ def segment_aorta(aorta):
     aorta_seg[..., ix_curve:] = 0
     
     # Label components and determine ascending/descending parts
-    labeled, _ = label(aorta_seg)
-    
-    # Determine which label is ascending vs descending based on volume
-    if np.sum(labeled == 1) > np.sum(labeled == 2):
-        mapping = np.array([0, AortaSegment.DESCENDING.value, AortaSegment.ASCENDING.value])
-    else:
-        mapping = np.array([0, AortaSegment.ASCENDING.value, AortaSegment.DESCENDING.value])
-    
-    aorta_seg = mapping[labeled]
-    
-    # Mark top section
+    aorta_seg = label_aorta_seg(aorta_seg)
     aorta_seg[..., ix_curve:] = aorta[..., ix_curve:] * AortaSegment.TOP.value
     
     # Mark descending bottom section
     mask = (aorta_seg == AortaSegment.DESCENDING.value) & (np.arange(aorta.shape[-1]) < ix_start)[None, None, :]
     aorta_seg[mask] = AortaSegment.DESCENDING_BOTTOM.value
+
 
     return aorta_seg.astype(np.uint8)
 
@@ -164,8 +178,12 @@ def create_cylindrical_voi(aorta_segment, pet, voxel_size, volume_ml=1.0, use_fu
     # Place VOI seeds at center of mass for each slice
     pet_masked = pet_masked.filled(0)
     for slc in range(start_slice, start_slice+n_slices_needed):
-        x, y = center_of_mass(pet_masked[..., slc])
-        x, y = int(round(x)), int(round(y))
+        try:
+            x, y = center_of_mass(pet_masked[..., slc])
+            x, y = int(round(x)), int(round(y))
+        except ValueError:
+            continue
+    
         voi[x, y, slc] = True
 
     # Create cylindrical shape by dilating the seed points
@@ -212,6 +230,8 @@ def refine_aorta_with_pet_uptake(aorta, pet):
     """
     pet_median_aorta = np.median(pet[aorta > 0])
     activity_mask = pet > (2/3 * pet_median_aorta)
+    activity_mask[aorta==0] = 0
+    activity_mask = binary_fill_holes(activity_mask)
     aorta_refined = aorta.copy()
     aorta_refined[~activity_mask] = 0
     return aorta_refined
